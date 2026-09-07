@@ -1,3 +1,8 @@
+/*
+Tein tehtävän ja sen kaikki annetut lisätehtävät, joten periaatteessa tavoittelen täyttä pistemäärää. Toki palautus on myöhässä.
+Tekijä: Lauri Knuuttila
+*/
+
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
 #include <zephyr/device.h>
