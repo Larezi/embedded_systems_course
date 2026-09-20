@@ -1,8 +1,7 @@
 
 
 /*
-Tein tehtävän ja sen kaikki annetut lisätehtävät, joten periaatteessa tavoittelen täyttä pistemäärää. Toki palautus on myöhässä.
-Tekijä: Lauri Knuuttila
+Tehtävä tehty 2 pisteen tavoitteiden mukaan. kaikki perusominaisuudet lisätty, sekä tehty ajastus
 */
 
 #include <zephyr/kernel.h>
