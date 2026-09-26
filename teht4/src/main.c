@@ -1,7 +1,7 @@
 
 
 /*
-Tehtävä tehty 2 pisteen tavoitteiden mukaan. kaikki perusominaisuudet lisätty, sekä tehty ajastus
+Tehtävä tehty tällä hetkellä 1 pisteen arvoisesti, perusvaatimukset täytetty.
 */
 
 #include <zephyr/kernel.h>
@@ -10,7 +10,8 @@ Tehtävä tehty 2 pisteen tavoitteiden mukaan. kaikki perusominaisuudet lisätty
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/uart.h>
 #include <stdlib.h>
-#include <zephyr/timing/timing.h>
+#include <string.h>
+
 // Led pin configurations
 static const struct gpio_dt_spec red = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
 static const struct gpio_dt_spec green = GPIO_DT_SPEC_GET(DT_ALIAS(led1), gpios);
@@ -19,7 +20,6 @@ volatile int led_status = 0; // 0: red, 1: green, 2: yellow
 
 int  init_led();
 int init_button();
-uint64_t total_timing_ns = 0;
 #define STACKSIZE 500
 #define PRIORITY 5
 void red_led_task(void *, void *, void*);
@@ -40,6 +40,10 @@ void button_4_handler(const struct device *dev, struct gpio_callback *cb, uint32
 #define BUTTON_2 DT_ALIAS(sw2)
 #define BUTTON_3 DT_ALIAS(sw3)
 #define BUTTON_4 DT_ALIAS(sw4)
+//time parser errors
+#define TIME_LEN_ERROR   -1
+#define TIME_ARRAY_ERROR -2
+#define TIME_VALUE_ERROR -3
 // UART initialization
 #define UART_DEVICE_NODE DT_CHOSEN(zephyr_shell_uart)
 static const struct device *const uart_dev = DEVICE_DT_GET(UART_DEVICE_NODE);
@@ -77,9 +81,6 @@ int init_uart(void) {
 // Main program
 int main(void)
 {
-    timing_init();
-    timing_start();
-    timing_t start_time = timing_counter_get();
 	init_led();
 
     	int ret = init_uart();
@@ -87,12 +88,56 @@ int main(void)
 		printk("UART initialization failed!\n");
 		return ret;
 	}
-    k_msleep(100);
-    timing_t end_time = timing_counter_get();
-    uint64_t timing_ns = timing_cycles_to_ns(timing_cycles_get(&start_time, &end_time));
-    printk("Init time: %lld \n", timing_ns);
-    timing_stop();
+
 	return 0;
+}
+//Time parser
+int time_parse(char *time) {
+
+	// how many seconds, default returns error
+	int seconds = TIME_LEN_ERROR;
+
+	// TODO: Check that string is not null
+    if (time == NULL) {
+        return TIME_LEN_ERROR;
+    }
+    if (strlen(time) != 6) {
+    return TIME_LEN_ERROR;
+    }
+	// Parse values from time string
+	// For example: 124033 -> 12hour 40min 33sec
+    int values[3];
+	values[2] = atoi(time+4); // seconds
+	time[4] = 0;
+	values[1] = atoi(time+2); // minutes
+	time[2] = 0;
+	values[0] = atoi(time); // hours
+	// Now you have:
+	// values[0] hour
+	// values[1] minute
+	// values[2] second
+
+	// TODO: Add boundary check time values: below zero or above limit not allowed
+	// limits are 59 for minutes, 23 for hours, etc
+    if (values[0] < 0 || values[0] > 23) {
+    return TIME_VALUE_ERROR;
+    }
+
+if (values[1] < 0 || values[1] > 59) {
+    return TIME_VALUE_ERROR;
+    }
+
+if (values[2] < 0 || values[2] > 59) {
+    return TIME_VALUE_ERROR;
+    }
+
+	// TODO: Calculate return value from the parsed minutes and seconds
+	// Otherwise error will be returned!
+	// seconds = ...
+    
+    seconds = values[0] * 3600 + values[1] * 60 + values[2];
+
+	return seconds;
 }
 
 // Initialize leds
@@ -186,7 +231,7 @@ static void dispatcher_task(void *unused1, void *unused2, void *unused3)
 
         // Erotellaan väri ja aika
         char color = sequence[0];
-        int time = atoi(sequence + 2);
+        int time = time_parse(sequence + 2);
 
         printk("Data: %c %d\n", color, time);
 
@@ -229,33 +274,15 @@ void red_led_task(void *, void *, void*)
 
         int time = atoi(data->msg);
 
+        printk("RED: %d ms\n", time);
+
         k_free(data);
-        
-        timing_start();
-        timing_t red_start_time = timing_counter_get();
 
         gpio_pin_set_dt(&red, 1);
-        k_msleep(time);
+        k_sleep(K_SECONDS(time));
         gpio_pin_set_dt(&red, 0);
 
-        timing_t red_end_time = timing_counter_get();
-        timing_stop();
-
-        uint64_t cycles =
-            timing_cycles_get(&red_start_time, &red_end_time);
-
-        uint64_t red_timing_ns =
-            timing_cycles_to_ns(cycles);
-
-        printk("Start: %llu\n", (unsigned long long)red_start_time);
-        printk("End: %llu\n", (unsigned long long)red_end_time);
-        printk("Cycles: %llu\n", (unsigned long long)cycles);
-        printk("Time: %llu ns\n", (unsigned long long)red_timing_ns);
-
-        total_timing_ns += red_timing_ns;
-
         k_sem_give(&led_done);
-        
     }
 }
 void green_led_task(void *, void *, void*) {
@@ -266,37 +293,30 @@ void green_led_task(void *, void *, void*) {
             k_fifo_get(&green_fifo, K_FOREVER);
 
         int time = atoi(data->msg);
-        timing_start();
-        timing_t green_start_time = timing_counter_get();
+
 		gpio_pin_set_dt(&green,1);
-		k_msleep(time);
+		k_sleep(K_SECONDS(time));
 		gpio_pin_set_dt(&green,0);
 
         k_free(data);
         
         k_sem_give(&led_done);
-        timing_t green_end_time = timing_counter_get();
-        timing_stop();
-        uint64_t green_timing_ns = timing_cycles_to_ns(timing_cycles_get(&green_start_time, &green_end_time));
-        printk("Green time: %lld ns\n", green_timing_ns);
-        total_timing_ns += green_timing_ns;
-        
         }
     }
 
 void yellow_led_task(void *, void *, void*) {
 	
+	printk("Yellow led thread started\n");
 	while (true) {
         struct data_t *data =
             k_fifo_get(&yellow_fifo, K_FOREVER);
 
         int time = atoi(data->msg);
-        timing_start();
-        timing_t yellow_start_time = timing_counter_get();
+
 		gpio_pin_set_dt(&red,1);
         gpio_pin_set_dt(&green,1);
 
-        k_msleep(time);
+        k_sleep(K_SECONDS(time));
 
 		gpio_pin_set_dt(&red,0);
         gpio_pin_set_dt(&green,0);
@@ -304,11 +324,6 @@ void yellow_led_task(void *, void *, void*) {
         k_free(data);
 
         k_sem_give(&led_done);
-        timing_t yellow_end_time = timing_counter_get();
-        timing_stop();
-        uint64_t yellow_timing_ns = timing_cycles_to_ns(timing_cycles_get(&yellow_start_time, &yellow_end_time));
-        printk("Yellow time: %lld ns\n", yellow_timing_ns);
-        total_timing_ns += yellow_timing_ns;
         }
 
 }
