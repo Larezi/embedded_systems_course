@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "TimeParser.h"
+#include <ctype.h>
 
 // time format: HHMMSS (6 characters)
 int time_parse(char *time) {
@@ -10,11 +11,16 @@ int time_parse(char *time) {
 
 	// TODO: Check that string is not null
     if (time == NULL) {
-        return TIME_LEN_ERROR;
+        return TIME_NULL_ERROR;
     }
     if (strlen(time) != 6) {
     return TIME_LEN_ERROR;
     }
+	for (int i = 0; i < 6; i++) {
+    if (!isdigit(time[i])) {
+        return TIME_DIGIT_ERROR;
+   		}
+	}
 	// Parse values from time string
 	// For example: 124033 -> 12hour 40min 33sec
     int values[3];
@@ -34,11 +40,11 @@ int time_parse(char *time) {
     return TIME_VALUE_ERROR;
     }
 
-if (values[1] < 0 || values[1] > 59) {
+	if (values[1] < 0 || values[1] > 59) {
     return TIME_VALUE_ERROR;
     }
 
-if (values[2] < 0 || values[2] > 59) {
+	if (values[2] < 0 || values[2] > 59) {
     return TIME_VALUE_ERROR;
     }
 

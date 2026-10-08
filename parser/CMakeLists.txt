@@ -1,4 +1,3 @@
-
 cmake_minimum_required(VERSION 3.24.0)
 
 set (This TimeParser)
@@ -12,10 +11,13 @@ enable_testing()
 add_subdirectory(googletest)
 
 set(Headers
-	TimeParser.h
+    TimeParser.h
+    TrafficParser.h
 )
+
 set(Sources
-	TimeParser.cpp
+    TimeParser.cpp
+    TrafficParser.cpp
 )
 
 add_library(${This} STATIC ${Sources} ${Headers})

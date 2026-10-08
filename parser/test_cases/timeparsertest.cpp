@@ -33,3 +33,10 @@ TEST(TimeParserTest, overHours) {
     char time_test[] = "240000";
     ASSERT_EQ(time_parse(time_test), TIME_VALUE_ERROR);
 }
+TEST(TimeParserTest, NullTest) {
+    ASSERT_EQ(time_parse(NULL), TIME_NULL_ERROR);
+}
+TEST(TimeParserTest, DigitTest) {
+    char time_test[] = "12a033";
+    ASSERT_EQ(time_parse(time_test), TIME_DIGIT_ERROR);
+}

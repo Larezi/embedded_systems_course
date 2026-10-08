@@ -1,7 +1,7 @@
 
 
 /*
-Tehtävä tehty tällä hetkellä 1 pisteen arvoisesti, perusvaatimukset täytetty.
+Tehtävä tehty 3 pisteen arvoisesti, lisätty parseriin tarkastuksia sekä luotu traffic_parser joka tarkistaa värit ja merkit(muut kuin numerot)
 */
 
 #include <zephyr/kernel.h>
@@ -44,6 +44,11 @@ void button_4_handler(const struct device *dev, struct gpio_callback *cb, uint32
 #define TIME_LEN_ERROR   -1
 #define TIME_ARRAY_ERROR -2
 #define TIME_VALUE_ERROR -3
+//traffic parse errors
+#define TRAFFIC_LEN_ERROR    -10
+#define TRAFFIC_COLOR_ERROR  -11
+#define TRAFFIC_FORMAT_ERROR -12
+#define TRAFFIC_NULL_ERROR   -13
 // UART initialization
 #define UART_DEVICE_NODE DT_CHOSEN(zephyr_shell_uart)
 static const struct device *const uart_dev = DEVICE_DT_GET(UART_DEVICE_NODE);
@@ -140,6 +145,35 @@ if (values[2] < 0 || values[2] > 59) {
 	return seconds;
 }
 
+int traffic_parse(char *sequence)
+{
+    if (sequence == NULL) {
+        return TRAFFIC_NULL_ERROR;
+    }
+
+    if (strlen(sequence) != 8) {
+        return TRAFFIC_LEN_ERROR;
+    }
+
+    if (sequence[0] != 'R' &&
+        sequence[0] != 'Y' &&
+        sequence[0] != 'G') {
+        return TRAFFIC_COLOR_ERROR;
+    }
+
+    if (sequence[1] != ' ') {
+        return TRAFFIC_FORMAT_ERROR;
+    }
+
+    int seconds = time_parse(sequence + 2);
+
+    if (seconds < 0) {
+        return seconds;
+    }
+
+    return seconds;
+}
+
 // Initialize leds
 int  init_led() {
     int ret;
@@ -231,8 +265,12 @@ static void dispatcher_task(void *unused1, void *unused2, void *unused3)
 
         // Erotellaan väri ja aika
         char color = sequence[0];
-        int time = time_parse(sequence + 2);
+        int time = traffic_parse(sequence);
 
+        if (time < 0) {
+        printk("Invalid traffic command, error: %d\n", time);
+        continue;
+        }
         printk("Data: %c %d\n", color, time);
 
         k_sem_take(&led_done, K_FOREVER);
