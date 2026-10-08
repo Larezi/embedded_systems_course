@@ -1,7 +1,7 @@
 
 
 /*
-Tehtävä tehty 2 pisteen tavoitteiden mukaan. kaikki perusominaisuudet lisätty, sekä tehty ajastus
+
 */
 
 #include <zephyr/kernel.h>
@@ -10,6 +10,7 @@ Tehtävä tehty 2 pisteen tavoitteiden mukaan. kaikki perusominaisuudet lisätty
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/uart.h>
 #include <stdlib.h>
+#include <zephyr/timing/timing.h>
 
 // Led pin configurations
 static const struct gpio_dt_spec red = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
@@ -42,7 +43,7 @@ void button_4_handler(const struct device *dev, struct gpio_callback *cb, uint32
 // UART initialization
 #define UART_DEVICE_NODE DT_CHOSEN(zephyr_shell_uart)
 static const struct device *const uart_dev = DEVICE_DT_GET(UART_DEVICE_NODE);
-
+uint64_t total_time = 0;
 // Create dispatcher FIFO buffer
 K_FIFO_DEFINE(dispatcher_fifo);
 K_FIFO_DEFINE(red_fifo);
@@ -57,7 +58,7 @@ struct data_t {
 	// Add fifo_reserved below
 	*************************/
 	void *fifo_reserved;
-	char msg[20];
+	char msg[100];
 };
 
 /********************
@@ -77,7 +78,8 @@ int init_uart(void) {
 int main(void)
 {
 	init_led();
-
+    timing_init();
+    timing_start();
     	int ret = init_uart();
 	if (ret != 0) {
 		printk("UART initialization failed!\n");
@@ -119,8 +121,8 @@ static void uart_task(void *unused1, void *unused2, void *unused3)
 	// Received character from UART
 	char rc=0;
 	// Message from UART
-	char uart_msg[20];
-	memset(uart_msg,0,20);
+	char uart_msg[100];
+	memset(uart_msg,0,100);
 	int uart_msg_cnt = 0;
 
 	while (true) {
@@ -167,47 +169,88 @@ static void dispatcher_task(void *unused1, void *unused2, void *unused3)
 {
     while (true) {
 
+        // Haetaan UART-taskilta tullut koko sekvenssi
         struct data_t *rec_item =
             k_fifo_get(&dispatcher_fifo, K_FOREVER);
 
-        char sequence[20];
-        memcpy(sequence, rec_item->msg, 20);
-        sequence[19] = '\0';
+        char sequence[100];
+        snprintf(sequence, sizeof(sequence), "%s", rec_item->msg);
 
         k_free(rec_item);
 
-        // Erotellaan väri ja aika
-        char color = sequence[0];
-        int time = atoi(sequence + 2);
+        // Aloitetaan uuden sekvenssin ajan laskeminen
+        total_time = 0;
 
-        printk("Data: %c %d\n", color, time);
+        // Pilkotaan sekvenssi pilkkujen kohdalta
+        char *command = strtok(sequence, ",");
 
+        while (command != NULL) {
+
+            char color;
+            int time;
+
+            // Esim. "R 1000" -> color = R, time = 1000
+            sscanf(command, " %c %d", &color, &time);
+
+            printk("Data: %c %d\n", color, time);
+
+            // Odotetaan että edellinen valo on valmis
+            k_sem_take(&led_done, K_FOREVER);
+
+            // Luodaan uusi viesti valotaskille
+            struct data_t *buf =
+                k_malloc(sizeof(struct data_t));
+
+            if (buf == NULL) {
+                k_sem_give(&led_done);
+                break;
+            }
+
+            // Valotaski tarvitsee ajan
+            snprintf(buf->msg, sizeof(buf->msg), "%d", time);
+
+            // Lähetetään oikealle valotaskille
+            if (color == 'R') {
+
+                k_fifo_put(&red_fifo, buf);
+
+            }
+            else if (color == 'Y') {
+
+                k_fifo_put(&yellow_fifo, buf);
+
+            }
+            else if (color == 'G') {
+
+                k_fifo_put(&green_fifo, buf);
+
+            }
+            else {
+
+                printk("Unknown color: %c\n", color);
+
+                k_free(buf);
+
+                // Taskia ei käynnistetty, joten
+                // semafori pitää vapauttaa itse
+                k_sem_give(&led_done);
+            }
+
+            // Haetaan sekvenssin seuraava komento
+            command = strtok(NULL, ",");
+        }
+
+        /*
+         * Tässä viimeinen valotaski saattaa olla vielä käynnissä,
+         * joten odotetaan sen valmistumista.
+         */
         k_sem_take(&led_done, K_FOREVER);
 
-        struct data_t *buf = k_malloc(sizeof(struct data_t));
+        printk("Total time: %llu us\n", total_time);
+        total_time = 0;
 
-
-        if (buf == NULL) {
-            k_sem_give(&led_done);
-            continue;
-        }
-
-        snprintf(buf->msg, sizeof(buf->msg), "%d", time);
-
-        if (color == 'R') {
-            k_fifo_put(&red_fifo, buf);
-        }
-        else if (color == 'Y') {
-            k_fifo_put(&yellow_fifo, buf);
-        }
-        else if (color == 'G') {
-            k_fifo_put(&green_fifo, buf);
-        }
-        else {
-            printk("Unknown color: %c\n", color);
-            k_free(buf);
-            k_sem_give(&led_done);
-        }
+        // Palautetaan semafori seuraavaa sekvenssiä varten
+        k_sem_give(&led_done);
     }
 }
 
@@ -221,15 +264,19 @@ void red_led_task(void *, void *, void*)
 
         int time = atoi(data->msg);
 
-        printk("RED: %d ms\n", time);
-
         k_free(data);
-
+        timing_t start_time = timing_counter_get();
         gpio_pin_set_dt(&red, 1);
-        k_msleep(time);
+        k_sleep(K_MSEC(time));
         gpio_pin_set_dt(&red, 0);
-
+        timing_t end_time = timing_counter_get();
+        uint64_t cycles = timing_cycles_get(&start_time, &end_time);
+        uint64_t ns = timing_cycles_to_ns(cycles);
+        uint64_t us = ns / 1000;
+        total_time += us;
+        //printk("RED time: %llu us\n", us);
         k_sem_give(&led_done);
+
     }
 }
 void green_led_task(void *, void *, void*) {
@@ -241,9 +288,16 @@ void green_led_task(void *, void *, void*) {
 
         int time = atoi(data->msg);
 
-		gpio_pin_set_dt(&green,1);
-		k_msleep(time);
-		gpio_pin_set_dt(&green,0);
+        timing_t start_time = timing_counter_get();
+        gpio_pin_set_dt(&green, 1);
+        k_sleep(K_MSEC(time));
+        gpio_pin_set_dt(&green, 0);
+        timing_t end_time = timing_counter_get();
+        uint64_t cycles = timing_cycles_get(&start_time, &end_time);
+        uint64_t ns = timing_cycles_to_ns(cycles);
+        uint64_t us = ns / 1000;
+        total_time += us;
+        //printk("Green time: %llu us\n", us);
 
         k_free(data);
         
@@ -260,10 +314,19 @@ void yellow_led_task(void *, void *, void*) {
 
         int time = atoi(data->msg);
 
-		gpio_pin_set_dt(&red,1);
-        gpio_pin_set_dt(&green,1);
-
-        k_msleep(time);
+        timing_t start_time = timing_counter_get();
+        gpio_pin_set_dt(&red, 1);
+        gpio_pin_set_dt(&green, 1);
+        k_sleep(K_MSEC(time));
+        gpio_pin_set_dt(&red, 0);
+        gpio_pin_set_dt(&green, 0);
+        timing_t end_time = timing_counter_get();
+        uint64_t cycles = timing_cycles_get(&start_time, &end_time);
+        uint64_t ns = timing_cycles_to_ns(cycles);
+        uint64_t us = ns / 1000;
+        total_time += us;
+        //printk("Yellow time: %llu us\n", us);
+        k_sleep(K_MSEC(time));
 
 		gpio_pin_set_dt(&red,0);
         gpio_pin_set_dt(&green,0);
