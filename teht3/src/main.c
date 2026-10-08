@@ -1,7 +1,9 @@
 
 
 /*
-
+tehtävä tehty vastaamaan 3 pisteen suoritusta. Ajastin ei toimi aikoin sleeppien aikana, joten se mittaa vain taskin muuta suoritsuaikaa -sleep aika.
+se on esimerkin mukaan tehty ja tein tehtävän olettaen että niin on tarkoituskin. lisäksi tehty debug taski tulostuksille sekä mahdollisuus
+poistaa debug tulostukset UARTista "D 0" ja "D 1" komennoilla.
 */
 
 #include <zephyr/kernel.h>
@@ -18,16 +20,20 @@ static const struct gpio_dt_spec green = GPIO_DT_SPEC_GET(DT_ALIAS(led1), gpios)
 // static const struct gpio_dt_spec blue = GPIO_DT_SPEC_GET(DT_ALIAS(led2), gpios);
 volatile int led_status = 0; // 0: red, 1: green, 2: yellow
 
+bool debug_enabled = true;
 int  init_led();
 int init_button();
 #define STACKSIZE 500
 #define PRIORITY 5
+#define DEBUG_PRIORITY 6
 void red_led_task(void *, void *, void*);
 void green_led_task(void *, void *, void*);
 void yellow_led_task(void *, void *, void*);
+void debug_task(void *, void *, void*);
 K_THREAD_DEFINE(red_thread,STACKSIZE,red_led_task,NULL,NULL,NULL,PRIORITY,0,0);
 K_THREAD_DEFINE(green_thread,STACKSIZE,green_led_task,NULL,NULL,NULL,PRIORITY,0,0);
 K_THREAD_DEFINE(yellow_thread,STACKSIZE,yellow_led_task,NULL,NULL,NULL,PRIORITY,0,0);
+K_THREAD_DEFINE(debug_thread,STACKSIZE,debug_task,NULL, NULL, NULL,DEBUG_PRIORITY,0,0);
 //prototyypit napeille
 void button_0_handler(const struct device *dev, struct gpio_callback *cb, uint32_t pins);
 void button_1_handler(const struct device *dev, struct gpio_callback *cb, uint32_t pins);
@@ -49,6 +55,7 @@ K_FIFO_DEFINE(dispatcher_fifo);
 K_FIFO_DEFINE(red_fifo);
 K_FIFO_DEFINE(yellow_fifo);
 K_FIFO_DEFINE(green_fifo);
+K_FIFO_DEFINE(debug_fifo);
 
 K_SEM_DEFINE(led_done, 1, 1);
 
@@ -59,6 +66,12 @@ struct data_t {
 	*************************/
 	void *fifo_reserved;
 	char msg[100];
+};
+struct debug_data_t {
+    void *fifo_reserved;
+    char datatype; // T: teksti, C: värin aika, S: kokonaiaika
+    uint64_t time;
+    char text;
 };
 
 /********************
@@ -192,7 +205,18 @@ static void dispatcher_task(void *unused1, void *unused2, void *unused3)
             // Esim. "R 1000" -> color = R, time = 1000
             sscanf(command, " %c %d", &color, &time);
 
-            printk("Data: %c %d\n", color, time);
+            if (color == 'D') {
+
+                if (time == 1) {
+                    debug_enabled = true;
+                }
+                else if (time == 0) {
+                    debug_enabled = false;
+                }
+
+                command = strtok(NULL, ",");
+                continue;
+            }
 
             // Odotetaan että edellinen valo on valmis
             k_sem_take(&led_done, K_FOREVER);
@@ -225,6 +249,7 @@ static void dispatcher_task(void *unused1, void *unused2, void *unused3)
                 k_fifo_put(&green_fifo, buf);
 
             }
+            
             else {
 
                 printk("Unknown color: %c\n", color);
@@ -245,13 +270,44 @@ static void dispatcher_task(void *unused1, void *unused2, void *unused3)
          * joten odotetaan sen valmistumista.
          */
         k_sem_take(&led_done, K_FOREVER);
+        struct debug_data_t *debug_data = k_malloc(sizeof(struct debug_data_t));
 
-        printk("Total time: %llu us\n", total_time);
+        if (debug_data != NULL) {
+            debug_data->time = total_time;
+            debug_data->datatype = 'S';
+            k_fifo_put(&debug_fifo, debug_data);
+        }
         total_time = 0;
 
         // Palautetaan semafori seuraavaa sekvenssiä varten
         k_sem_give(&led_done);
     }
+}
+
+void debug_task(void *, void *, void*)
+{
+    struct debug_data_t *received;
+
+    while (true) {
+        received = k_fifo_get(&debug_fifo, K_FOREVER);
+        if(!debug_enabled){
+            k_free(received);
+            continue;
+        }
+        else if(debug_enabled){
+        if(received->datatype == 'C'){
+        printk("Time:  Color: %c, %llu us\n", received->text, received->time);
+        }
+        else if(received->datatype == 'T'){
+            printk("Debug received: %c\n", received->text);
+        }
+        else if(received->datatype == 'S'){
+            printk("total time: %llu us\n", received->time);
+        }
+        k_free(received);
+
+    }
+}
 }
 
 // Task to handle red led
@@ -274,7 +330,16 @@ void red_led_task(void *, void *, void*)
         uint64_t ns = timing_cycles_to_ns(cycles);
         uint64_t us = ns / 1000;
         total_time += us;
-        //printk("RED time: %llu us\n", us);
+
+        struct debug_data_t *debug_data = k_malloc(sizeof(struct debug_data_t));
+
+        if (debug_data != NULL) {
+            debug_data->time = us;
+            debug_data->text = 'R';
+            debug_data->datatype = 'C';
+            k_fifo_put(&debug_fifo, debug_data);
+        }
+
         k_sem_give(&led_done);
 
     }
@@ -297,7 +362,14 @@ void green_led_task(void *, void *, void*) {
         uint64_t ns = timing_cycles_to_ns(cycles);
         uint64_t us = ns / 1000;
         total_time += us;
-        //printk("Green time: %llu us\n", us);
+        struct debug_data_t *debug_data = k_malloc(sizeof(struct debug_data_t));
+
+        if (debug_data != NULL) {
+            debug_data->time = us;
+            debug_data->text = 'G';
+            debug_data->datatype = 'C';
+            k_fifo_put(&debug_fifo, debug_data);
+        }
 
         k_free(data);
         
@@ -325,11 +397,14 @@ void yellow_led_task(void *, void *, void*) {
         uint64_t ns = timing_cycles_to_ns(cycles);
         uint64_t us = ns / 1000;
         total_time += us;
-        //printk("Yellow time: %llu us\n", us);
-        k_sleep(K_MSEC(time));
+        struct debug_data_t *debug_data = k_malloc(sizeof(struct debug_data_t));
 
-		gpio_pin_set_dt(&red,0);
-        gpio_pin_set_dt(&green,0);
+        if (debug_data != NULL) {
+            debug_data->time = us;
+            debug_data->text = 'Y';
+            debug_data->datatype = 'C';
+            k_fifo_put(&debug_fifo, debug_data);
+        }
 
         k_free(data);
 
