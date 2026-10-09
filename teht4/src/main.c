@@ -11,6 +11,7 @@ Tehtävä tehty 3 pisteen arvoisesti, lisätty parseriin tarkastuksia sekä luot
 #include <zephyr/drivers/uart.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 // Led pin configurations
 static const struct gpio_dt_spec red = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
@@ -41,9 +42,11 @@ void button_4_handler(const struct device *dev, struct gpio_callback *cb, uint32
 #define BUTTON_3 DT_ALIAS(sw3)
 #define BUTTON_4 DT_ALIAS(sw4)
 //time parser errors
-#define TIME_LEN_ERROR   -1
-#define TIME_ARRAY_ERROR -2
-#define TIME_VALUE_ERROR -3
+#define TIME_LEN_ERROR      -1
+#define TIME_ARRAY_ERROR    -2
+#define TIME_VALUE_ERROR    -3
+#define TIME_NULL_ERROR     -4
+#define TIME_DIGIT_ERROR    -5
 //traffic parse errors
 #define TRAFFIC_LEN_ERROR    -10
 #define TRAFFIC_COLOR_ERROR  -11
@@ -104,11 +107,16 @@ int time_parse(char *time) {
 
 	// TODO: Check that string is not null
     if (time == NULL) {
-        return TIME_LEN_ERROR;
+        return TIME_NULL_ERROR;
     }
     if (strlen(time) != 6) {
     return TIME_LEN_ERROR;
     }
+	for (int i = 0; i < 6; i++) {
+    if (!isdigit(time[i])) {
+        return TIME_DIGIT_ERROR;
+   		}
+	}
 	// Parse values from time string
 	// For example: 124033 -> 12hour 40min 33sec
     int values[3];
@@ -128,11 +136,11 @@ int time_parse(char *time) {
     return TIME_VALUE_ERROR;
     }
 
-if (values[1] < 0 || values[1] > 59) {
+	if (values[1] < 0 || values[1] > 59) {
     return TIME_VALUE_ERROR;
     }
 
-if (values[2] < 0 || values[2] > 59) {
+	if (values[2] < 0 || values[2] > 59) {
     return TIME_VALUE_ERROR;
     }
 
@@ -213,15 +221,25 @@ static void uart_task(void *unused1, void *unused2, void *unused3)
 	while (true) {
 		// Ask UART if data available
 		if (uart_poll_in(uart_dev,&rc) == 0) {
-			printk("Received: %c\n",rc);
 			// If character is not newline, add to UART message buffer
-			if (rc != '\r') {
+			
+            if(rc == 'X'){
+                
+                int result = time_parse(uart_msg);
+                // Palautetaan tulos Robotille
+                printk("%dX", result);
+
+                uart_msg_cnt = 0;
+                memset(uart_msg, 0, 20);
+            }
+            
+            else if (rc != '\r' && rc != 'X') {
 				uart_msg[uart_msg_cnt] = rc;
 				uart_msg_cnt++;
 			// Character is newline, copy dispatcher data and put to FIFO buffer
-			} else {
-				printk("UART msg: %s\n", uart_msg);
-                
+			} 
+            
+            else {
 				struct data_t *buf = k_malloc(sizeof(struct data_t));
 				if (buf == NULL) {
 					return;
@@ -242,7 +260,6 @@ static void uart_task(void *unused1, void *unused2, void *unused3)
 				memset(uart_msg,0,20);
 			}
 		}
-		k_msleep(10);
 	}
 	return;
 }
