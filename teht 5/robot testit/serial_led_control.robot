@@ -7,7 +7,7 @@ ${board}   nRF5340
 ${ledon}   1
 ${ledoff}  0
 
-*** Test Cases ***
+*** Test Cases  ***
 Connect Serial
 	Log To Console  Connecting to ${com} ${board}
 	Add Port  ${com}  baudrate=115200   encoding=ascii
